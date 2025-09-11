@@ -8,3 +8,6 @@ requests
 
 # Cosmos DB
 azure-cosmos
+ 
+# JWT support
+PyJWT

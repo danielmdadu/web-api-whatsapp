@@ -9,6 +9,11 @@ Variables de entorno
 # AI BOT AZURE FUNTION
 AIBOT_FUNCTION_URL
 
+# AUTH
+LOGIN_USER
+LOGIN_PASSWORD
+JWT_SECRET
+
 # COSMOS
 COSMOS_CONNECTION_STRING
 COSMOS_DB_NAME
@@ -24,14 +29,19 @@ Endpoints
   - `username` (string)
   - `password` (string)
 - Responses:
-  - 200: "Login successful"
+  - 200: JSON with a signed JWT access token
   - 401: "Login failed"
 
 Sample responses:
 
 Success (200):
 ```json
-"Login successful"
+{
+  "message": "Login successful",
+  "access_token": "<JWT_TOKEN_HERE>",
+  "token_type": "Bearer",
+  "expires_in": 28800
+}
 ```
 
 Failure (401):
@@ -82,7 +92,32 @@ Sample success response (200):
 }
 ```
 
-4) `POST /get-conversation`
+4) `GET /conversations/recent`
+- Description: Devuelve las últimas 10 conversaciones ordenadas por `updated_at` desc.
+- Responses:
+  - 200: JSON array con una estructura como esta:
+    ```json
+    [
+      {
+        "id": "conv_12345",
+        "lead_id": "lead_98765",
+        "canal": "whatsapp",
+        "created_at": "2025-08-24T18:00:00Z",
+        "updated_at": "2025-08-24T18:15:00Z",
+        "state": {
+          "nombre": "María Rodriguez",
+          "telefono": "521234567890",
+          "completed": false
+        },
+        "conversation_mode": "agente",
+        "asignado_asesor": "asesor_ventas_001"
+      }
+    ]
+    ```
+  - 500: Internal server error
+
+
+5) `POST /get-conversation`
 - Description: Obtiene el estado completo de una conversación. Es de tipo POST y recibe `wa_id` en el body JSON.
 - Body (JSON):
   - `wa_id` (string) - identificador del lead (sin el prefijo `conv_`)
@@ -103,9 +138,48 @@ Sample success response (200):
   },
   "messages": [
     {
-      "from": "user",
-      "text": "Hola",
-      "ts": "2025-08-24T18:00:00Z"
+      "id": "msg_2",
+      "sender": "bot",
+      "text": "Para brindarte una atención personalizada, ¿podrías decirme tu nombre? Así podré ayudarte mejor con lo que necesitas.",
+      "timestamp": "2025-08-29T03:09:47Z",
+      "delivered": true,
+      "read": false
+    },
+  ],
+  "completed": false,
+  "updated_at": "2025-08-24T18:15:00Z"
+}
+```
+
+6) `POST /get-recent-messages`
+- Description: Devuelve los últimos mensajes de una conversación específica. Endpoint usado por el polling de la aplicación. Es de tipo POST para permitir enviar en el body JSON `wa_id` y `last_message_id`.
+- Body (JSON):
+  - `wa_id` (string) - identificador del lead (sin el prefijo `conv_`)
+  - `last_message_id` (string) - id del último mensaje que el cliente ya tiene (opcional, si se envía, la respuesta contendrá solo mensajes posteriores)
+- Responses:
+  - 200: JSON con `conversation_id`, `conversation_mode`, `state` y `messages` (solo los mensajes nuevos desde `last_message_id`)
+  - 400: Falta de parámetros o JSON inválido
+  - 401: Unauthorized (token JWT faltante, inválido o expirado)
+  - 404: Conversación no encontrada
+  - 500: Error interno del servidor
+
+Ejemplo de respuesta de éxito (200):
+```json
+{
+  "wa_id": "lead_98765",
+  "conversation_mode": "bot",
+  "lead_info": {
+    "nombre": "María",
+    "telefono": "521234567890",
+  },
+  "messages": [
+    {
+      "id": "msg_1690000000_1",
+      "sender": "lead",
+      "text": "Hola otra vez",
+      "timestamp": "2025-08-28T12:40:00Z",
+      "delivered": true,
+      "read": false
     }
   ],
   "completed": false,
@@ -113,38 +187,41 @@ Sample success response (200):
 }
 ```
 
-5) `GET /conversations/recent`
-- Description: Devuelve las últimas 10 conversaciones ordenadas por `updated_at` desc.
-- Responses:
-  - 200: JSON array, donde cada elemento tiene la siguiente forma:
-    ```json
-    {
-      "id": "conv_12345",
-      "lead_id": "lead_98765",
-      "canal": "whatsapp",
-      "created_at": "2025-08-24T18:00:00Z",
-      "updated_at": "2025-08-24T18:15:00Z",
-      "state": {
-        "nombre": "María",
-        "nombre_completo": "María García López",
-        "telefono": "521234567890",
-        "completed": false
-      },
-      "conversation_mode": "agente",
-      "asignado_asesor": "asesor_ventas_001"
-    }
-    ```
-  - 500: Internal server error
-```
-
 Notes
 -----
-- Cosmos DB connection is currently hard-coded for local testing in `get_cosmos_container()`; replace with environment variables `COSMOS_CONNECTION_STRING`, `COSMOS_DB_NAME`, and `COSMOS_CONTAINER_NAME` for production.
-- The `send-agent-message` function currently uses a hard-coded chatbot URL — switch to environment configuration before deploying.
+- La conexión a Cosmos DB actualmente está configurada para pruebas locales en `get_cosmos_container()`; reemplázala por las variables de entorno `COSMOS_CONNECTION_STRING`, `COSMOS_DB_NAME` y `COSMOS_CONTAINER_NAME` para producción.
+- La función `send-agent-message` actualmente usa una URL de chatbot codificada — cámbiala por una configuración a través de variables de entorno antes de desplegar.
+- Autenticación: la Function App ahora emite un JWT al iniciar sesión con éxito. La secret del JWT debe configurarse en App Settings como `JWT_SECRET`.
 
-How to run locally
--------------------
-- Install Python requirements from `requirements.txt` into your venv.
-- Start the Functions host (VS Code task included): `func host start`.
-- Use `test.http` or curl to exercise the endpoints.
+Autenticación / notas de uso
+---------------------------
+- Tras un `POST /login` exitoso, la respuesta contiene `access_token` (un JWT). El frontend debe almacenar ese token (por ejemplo en `localStorage`) y enviarlo en las peticiones siguientes en el header `Authorization` así:
 
+```
+Authorization: Bearer <token>
+```
+
+Ejemplo de uso en cliente (browser JS):
+
+```js
+// Tras recibir la respuesta del login en `data`
+localStorage.setItem('access_token', data.access_token);
+
+// Más tarde, enviando una petición protegida
+fetch('/conversation-mode', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'Authorization': 'Bearer ' + localStorage.getItem('access_token')
+  },
+  body: JSON.stringify({ wa_id: 'lead_123', mode: 'agente' })
+});
+```
+
+Si el JWT falta, es inválido o ha expirado, los endpoints protegidos devolverán 401 Unauthorized.
+
+Cómo ejecutar localmente
+-----------------------
+- Instala los requisitos de Python listados en `requirements.txt` dentro de tu entorno virtual.
+- Inicia el host de Functions (hay una tarea de VS Code incluida): `func host start`.
+- Usa `test.http` o `curl` para probar los endpoints.

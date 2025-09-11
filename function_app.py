@@ -3,8 +3,9 @@ import logging
 import json
 import os
 import requests
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from azure.cosmos import CosmosClient
+import jwt
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
 
@@ -17,8 +18,34 @@ def login(req: func.HttpRequest) -> func.HttpResponse:
     """
     logging.info("login - Start")
     body = req.get_json()
-    if body.get("username") == "admin" and body.get("password") == "admin":
-        return func.HttpResponse("Login successful", status_code=200)
+    if not body:
+        return func.HttpResponse("Invalid JSON", status_code=400)
+
+    if body.get("username") == os.environ["LOGIN_USER"] and body.get("password") == os.environ["LOGIN_PASSWORD"]:
+        # Create JWT
+        secret = os.environ["JWT_SECRET"]
+        if not secret:
+            logging.error("JWT_SECRET not configured in app settings")
+            return func.HttpResponse("Server misconfiguration", status_code=500)
+
+        now = datetime.now(timezone.utc)
+        payload = {
+            "sub": body.get("username"),
+            "iat": int(now.timestamp()),
+            # token expires in 8 hours
+            "exp": int((now + timedelta(hours=8)).timestamp())
+        }
+
+        token = jwt.encode(payload, secret, algorithm="HS256")
+
+        response = {
+            "message": "Login successful",
+            "access_token": token,
+            "token_type": "Bearer",
+            "expires_in": 8 * 3600
+        }
+
+        return func.HttpResponse(json.dumps(response), status_code=200, mimetype="application/json")
     else:
         return func.HttpResponse("Login failed", status_code=401)
 
@@ -30,6 +57,11 @@ def conversation_mode(req: func.HttpRequest) -> func.HttpResponse:
     logging.info('conversation-mode endpoint called')
     
     try:
+        # Verify JWT from Authorization header
+        auth_header = req.headers.get('Authorization') or req.headers.get('authorization')
+        if not verify_bearer_token(auth_header):
+            return func.HttpResponse('Unauthorized', status_code=401)
+
         body = req.get_json()
         if not body:
             return func.HttpResponse("Invalid JSON", status_code=400)
@@ -67,98 +99,6 @@ def conversation_mode(req: func.HttpRequest) -> func.HttpResponse:
         logging.error(f"Error in conversation-mode endpoint: {e}")
         return func.HttpResponse("Internal server error", status_code=500)
 
-@app.route(route="send-agent-message", methods=["POST"])
-def send_agent_message(req: func.HttpRequest) -> func.HttpResponse:
-    """
-    Envía un mensaje del agente al lead a través del chatbot Azure Function.
-    """
-    logging.info('send-agent-message endpoint called')
-    
-    try:
-        body = req.get_json()
-        if not body:
-            return func.HttpResponse("Invalid JSON", status_code=400)
-        
-        wa_id = body.get("wa_id")
-        message = body.get("message")
-        
-        if not wa_id or not message:
-            return func.HttpResponse("Missing wa_id or message", status_code=400)
-        
-        # Llamar al endpoint agent-message del chatbot Azure Function
-        chatbot_url = os.environ["AIBOT_FUNCTION_URL"]
-
-        if not chatbot_url:
-            return func.HttpResponse("Chatbot function URL not configured", status_code=500)
-        
-        payload = {
-            "wa_id": wa_id,
-            "message": message
-        }
-        
-        response = requests.post(
-            chatbot_url,
-            json=payload,
-            timeout=30
-        )
-        
-        if response.status_code == 200:
-            response_data = {
-                "success": True,
-                "message": "Agent message sent successfully",
-                "wa_id": wa_id,
-                "message_sent": message,
-                "conversation_mode": "agente",
-                "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            }
-            return func.HttpResponse(json.dumps(response_data), status_code=200, mimetype="application/json")
-        else:
-            logging.error(f"Chatbot function returned error: {response.status_code} - {response.text}")
-            return func.HttpResponse("Failed to send agent message", status_code=500)
-            
-    except requests.RequestException as e:
-        logging.error(f"Error calling chatbot function: {e}")
-        return func.HttpResponse("Error communicating with chatbot service", status_code=500)
-    except Exception as e:
-        logging.error(f"Error in send-agent-message endpoint: {e}")
-        return func.HttpResponse("Internal server error", status_code=500)
-
-@app.route(route="get-conversation", methods=["POST"])
-def get_conversation(req: func.HttpRequest) -> func.HttpResponse:
-    """
-    Obtiene el estado completo de una conversación para mostrar en la interfaz web.
-    Ahora acepta POST con JSON body que contiene `wa_id`.
-    """
-    logging.info('get-conversation endpoint called (POST body)')
-    
-    try:
-        body = req.get_json()
-        if not body:
-            return func.HttpResponse("Invalid JSON", status_code=400)
-
-        wa_id = body.get('wa_id')
-        if not wa_id:
-            return func.HttpResponse("Missing wa_id in request body", status_code=400)
-
-        # Obtener estado de la conversación
-        conversation_data = get_conversation_state(wa_id)
-
-        if not conversation_data:
-            return func.HttpResponse("Conversation not found", status_code=404)
-
-        # Formatear respuesta según el formato solicitado
-        formatted_response = format_conversation_response(conversation_data)
-
-        return func.HttpResponse(
-            json.dumps(formatted_response, ensure_ascii=False), 
-            status_code=200, 
-            mimetype="application/json"
-        )
-
-    except Exception as e:
-        logging.error(f"Error in get-conversation endpoint: {e}")
-        return func.HttpResponse("Internal server error", status_code=500)
-
 def get_cosmos_container():
     """
     Inicializa y retorna el container de Cosmos DB.
@@ -175,6 +115,161 @@ def get_cosmos_container():
     except Exception as e:
         logging.error(f"Error conectando a Cosmos DB: {e}")
         raise
+
+def save_message_in_db(wa_id: str, message: str, whatsapp_message_id: str) -> bool:
+    """
+    Guarda un mensaje en la base de datos de Cosmos DB.
+    NO guarda todo el estado de la conversación.
+    Solo guarda el mensaje actual al final de la lista de mensajes
+    """
+    try:
+        container = get_cosmos_container()
+
+        now = datetime.now(timezone.utc)
+        now_str = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        message_id = f"msg_{int(now.timestamp())}_1"  # Simple ID basado en timestamp
+
+        # Crear el nuevo mensaje del agente
+        new_message = {
+            "id": message_id,
+            "whatsapp_message_id": whatsapp_message_id,
+            "sender": "agente",
+            "text": message,
+            "timestamp": now_str,
+            "delivered": True,
+            "read": False
+        }
+        
+        # Usar patch operations para agregar el mensaje y actualizar updated_at
+        # Esto es más eficiente que cargar todo el documento
+        patch_ops = [
+            {
+                "op": "add",
+                "path": "/messages/-",
+                "value": new_message
+            },
+            {
+                "op": "replace",
+                "path": "/updated_at",
+                "value": now_str
+            }
+        ]
+        
+        # Ejecutar patch operation
+        container.patch_item(
+            item=f"conv_{wa_id}",
+            partition_key=wa_id,
+            patch_operations=patch_ops
+        )
+        
+        logging.info(f"Mensaje de agente guardado exitosamente para wa_id: {wa_id}")
+        return message_id
+        
+    except Exception as e:
+        logging.error(f"Error guardando mensaje de agente en DB para wa_id {wa_id}: {e}")
+        return None
+
+@app.route(route="send-agent-message", methods=["POST"])
+def send_agent_message(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    Envía un mensaje del agente al lead a través del chatbot Azure Function.
+    NO guarda el mensaje en la base de datos, de eso se encarga la otra Azure Function.
+    """
+    logging.info('send-agent-message endpoint called')
+    
+    try:
+        # Verify JWT
+        auth_header = req.headers.get('Authorization') or req.headers.get('authorization')
+        if not verify_bearer_token(auth_header):
+            return func.HttpResponse('Unauthorized', status_code=401)
+
+        body = req.get_json()
+        if not body:
+            return func.HttpResponse("Invalid JSON", status_code=400)
+        
+        wa_id = body.get("wa_id")
+        message = body.get("message")
+        
+        if not wa_id or not message:
+            return func.HttpResponse("Missing wa_id or message", status_code=400)
+        
+        # Llamar al endpoint agent-message del chatbot Azure Function
+        chatbot_url = os.environ["AIBOT_FUNCTION_URL"]
+
+        if not chatbot_url:
+            return func.HttpResponse("Chatbot function URL not configured", status_code=500)
+
+        logging.info(f"Sending agent message to chatbot function: {chatbot_url}")
+        response = requests.post(
+            chatbot_url,
+            json={
+                "wa_id": wa_id,
+                "message": message
+            },
+            timeout=30
+        )
+        
+        logging.info(f"Response from chatbot function: {response.text}")
+        if response.status_code == 200:            
+            # Acceder al valor de whatsapp_message_id
+            whatsapp_message_id = response.text
+
+            # Guardar el mensaje en la base de datos
+            message_id = save_message_in_db(wa_id, message, whatsapp_message_id)
+
+            response_data = {
+                "success": True,
+                "message": "Agent message sent successfully",
+                "wa_id": wa_id,
+                "message_id_sent": message_id,
+                "conversation_mode": "agente",
+                "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            }
+
+            return func.HttpResponse(json.dumps(response_data), status_code=200, mimetype="application/json")
+        else:
+            logging.error(f"Chatbot function returned error: {response.status_code} - {response.text}")
+            return func.HttpResponse("Failed to send agent message", status_code=500)
+            
+    except requests.RequestException as e:
+        logging.error(f"Error calling chatbot function: {e}")
+        return func.HttpResponse("Error communicating with chatbot service", status_code=500)
+    except Exception as e:
+        logging.error(f"Error in send-agent-message endpoint: {e}")
+        return func.HttpResponse("Internal server error", status_code=500)
+
+def extract_token_from_header(auth_header: str) -> str:
+    """Extracts the token string from an Authorization header of the form 'Bearer <token>'"""
+    if not auth_header:
+        return None
+    parts = auth_header.split()
+    if len(parts) == 2 and parts[0].lower() == 'bearer':
+        return parts[1]
+    return None
+
+def verify_bearer_token(auth_header: str) -> bool:
+    """Verifies the JWT using the secret in env var JWT_SECRET. Returns True if valid."""
+    token = extract_token_from_header(auth_header)
+    if not token:
+        logging.warning('No bearer token provided')
+        return False
+
+    secret = os.environ['JWT_SECRET']
+    if not secret:
+        logging.error('JWT_SECRET not configured')
+        return False
+
+    try:
+        decoded = jwt.decode(token, secret, algorithms=["HS256"])
+        logging.debug(f"JWT valid for subject: {decoded.get('sub')}")
+        return True
+    except jwt.ExpiredSignatureError:
+        logging.warning('JWT expired')
+        return False
+    except jwt.InvalidTokenError as e:
+        logging.warning(f'Invalid JWT: {e}')
+        return False
 
 def get_conversation_state(wa_id: str) -> dict:
     """
@@ -234,31 +329,6 @@ def update_conversation_mode(wa_id: str, mode: str) -> bool:
             logging.error(f"Error actualizando modo de conversación: {e}")
         return False
 
-def format_conversation_response(conversation_data: dict) -> dict:
-    """
-    Formatea los datos de conversación al formato requerido.
-    """
-    logging.info(f"conversation_data: {conversation_data}")
-    state = conversation_data.get("state", {})
-    
-    # Determinar nombre (nombre_completo si existe, sino nombre)
-    nombre = state.get("nombre_completo") or state.get("nombre", "")
-    
-    formatted_response = {
-        "wa_id": conversation_data.get("lead_id"),
-        "conversation_mode": conversation_data.get("conversation_mode", "bot"),
-        "lead_info": {
-            "nombre": nombre,
-            "telefono": state.get("telefono", "")
-        },
-        "messages": conversation_data.get("messages", []),
-        "completed": state.get("completed", False),
-        "updated_at": conversation_data.get("updated_at", "")
-    }
-    
-    return formatted_response
-
-
 @app.route(route="leads/recent", methods=["GET"])
 def get_recent_leads(req: func.HttpRequest) -> func.HttpResponse:
     """
@@ -291,7 +361,6 @@ def get_recent_leads(req: func.HttpRequest) -> func.HttpResponse:
             # Keep only the four requested fields in the state
             trimmed_state = {
                 "nombre": raw_state.get("nombre", ""),
-                "nombre_completo": raw_state.get("nombre_completo", ""),
                 "telefono": raw_state.get("telefono", ""),
                 "completed": raw_state.get("completed", False)
             }
@@ -312,4 +381,117 @@ def get_recent_leads(req: func.HttpRequest) -> func.HttpResponse:
 
     except Exception as e:
         logging.error(f"Error in get-recent-conversations endpoint: {e}")
+        return func.HttpResponse("Internal server error", status_code=500)
+
+def format_conversation_response(conversation_data: dict, messages: list = None) -> dict:
+    """
+    Formatea los datos de conversación al formato requerido.
+    """
+    logging.info(f"conversation_data: {conversation_data}")
+    state = conversation_data.get("state", {})
+
+    if messages is None:
+        messages = conversation_data.get("messages", [])
+    
+    formatted_response = {
+        "wa_id": conversation_data.get("lead_id"),
+        "conversation_mode": conversation_data.get("conversation_mode", "bot"),
+        "lead_info": {
+            "nombre": state.get("nombre", ""),
+            "telefono": state.get("telefono", "")
+        },
+        "messages": messages,
+        "completed": state.get("completed", False),
+        "updated_at": conversation_data.get("updated_at", "")
+    }
+    
+    return formatted_response
+
+@app.route(route="get-conversation", methods=["POST"])
+def get_conversation(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    Obtiene el estado completo de una conversación para mostrar en la interfaz web.
+    Ahora acepta POST con JSON body que contiene `wa_id`.
+    """
+    logging.info('get-conversation endpoint called (POST body)')
+    
+    try:
+        # Verify JWT
+        auth_header = req.headers.get('Authorization') or req.headers.get('authorization')
+        if not verify_bearer_token(auth_header):
+            return func.HttpResponse('Unauthorized', status_code=401)
+
+        body = req.get_json()
+        if not body:
+            return func.HttpResponse("Invalid JSON", status_code=400)
+
+        wa_id = body.get('wa_id')
+        if not wa_id:
+            return func.HttpResponse("Missing wa_id in request body", status_code=400)
+
+        # Obtener estado de la conversación
+        conversation_data = get_conversation_state(wa_id)
+
+        if not conversation_data:
+            return func.HttpResponse("Conversation not found", status_code=404)
+
+        # Formatear respuesta según el formato solicitado
+        formatted_response = format_conversation_response(conversation_data)
+
+        return func.HttpResponse(
+            json.dumps(formatted_response, ensure_ascii=False), 
+            status_code=200, 
+            mimetype="application/json"
+        )
+
+    except Exception as e:
+        logging.error(f"Error in get-conversation endpoint: {e}")
+        return func.HttpResponse("Internal server error", status_code=500)
+
+@app.route(route="get-recent-messages", methods=["POST"])
+def get_recent_messages(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    Devuelve los últimos mensajes de una conversación específica.
+    Endpoint usado por el polling de la aplicación.
+    Es de tipo POST para permitir el JSON body con el `wa_id` y `last_message_id`.
+    """
+    logging.info('get-recent-messages endpoint called')
+
+    try:
+        # Verify JWT
+        auth_header = req.headers.get('Authorization') or req.headers.get('authorization')
+        if not verify_bearer_token(auth_header):
+            return func.HttpResponse('Unauthorized', status_code=401)
+
+        body = req.get_json()
+        if not body:
+            return func.HttpResponse("Invalid JSON", status_code=400)
+
+        wa_id = body.get('wa_id')
+        last_message_id = body.get('last_message_id')
+        if not wa_id or not last_message_id:
+            return func.HttpResponse("Missing wa_id or last_message_id in request body", status_code=400)
+
+        container = get_cosmos_container()
+
+        conversation = container.read_item(item=f"conv_{wa_id}", partition_key=wa_id)
+
+        messages = conversation.get("messages", [])
+
+        # Filtrar mensajes nuevos
+        new_messages = []
+        if last_message_id:
+            found_last = False
+            for msg in messages:
+                if found_last:
+                    new_messages.append(msg)
+                elif msg["id"] == last_message_id:
+                    found_last = True
+        
+        response = format_conversation_response(conversation, new_messages)
+
+        return func.HttpResponse(json.dumps(response, ensure_ascii=False), status_code=200, mimetype="application/json")
+
+    except Exception as e:
+        logging.error(f"Error in get-recent-messages endpoint: {e}")
         return func.HttpResponse("Internal server error", status_code=500)

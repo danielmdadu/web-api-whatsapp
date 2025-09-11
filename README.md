@@ -92,7 +92,7 @@ Sample success response (200):
 }
 ```
 
-4) `GET /conversations/recent`
+4) `GET /leads/recent`
 - Description: Devuelve las últimas 10 conversaciones ordenadas por `updated_at` desc.
 - Responses:
   - 200: JSON array con una estructura como esta:

@@ -2,6 +2,24 @@
 
 This Azure Function app exposes several HTTP endpoints used by the chatbot system.
 
+Variables de entorno
+---------
+
+```python
+# AI BOT AZURE FUNTION
+AIBOT_FUNCTION_URL
+
+# AUTH
+LOGIN_USER
+LOGIN_PASSWORD
+JWT_SECRET
+
+# COSMOS
+COSMOS_CONNECTION_STRING
+COSMOS_DB_NAME
+COSMOS_CONTAINER_NAME
+```
+
 Endpoints
 ---------
 

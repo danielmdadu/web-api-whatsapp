@@ -338,6 +338,11 @@ def get_recent_leads(req: func.HttpRequest) -> func.HttpResponse:
     logging.info('get-recent-leads endpoint called')
 
     try:
+        # Verify JWT
+        auth_header = req.headers.get('Authorization') or req.headers.get('authorization')
+        if not verify_bearer_token(auth_header):
+            return func.HttpResponse('Unauthorized', status_code=401)
+            
         container = get_cosmos_container()
 
         # Query para obtener las últimas 11 conversaciones por updated_at descendente

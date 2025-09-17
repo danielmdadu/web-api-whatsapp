@@ -99,7 +99,7 @@ Sample success response (200):
 ---
 
 4) `GET /leads/recent`
-- Description: Devuelve las últimas 10 conversaciones ordenadas por `updated_at` desc.
+- Description: Devuelve las últimas 10 conversaciones ordenadas por `updated_at` desc e indica si hay más conversaciones en la base de datos con el campo `has_more`.
 - Responses:
   - 200: JSON array con una estructura como esta:
     ```json

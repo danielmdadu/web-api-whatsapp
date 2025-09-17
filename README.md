@@ -49,6 +49,8 @@ Failure (401):
 "Login failed"
 ```
 
+---
+
 2) `POST /conversation-mode`
 - Description: Cambia el modo de conversación (bot/agente) para un lead específico.
 - Body (JSON):
@@ -69,6 +71,8 @@ Sample success response (200):
   "timestamp": "2025-08-28T12:34:56Z"
 }
 ```
+
+---
 
 3) `POST /send-agent-message`
 - Description: Envía un mensaje del agente al lead invocando la función del chatbot.
@@ -92,30 +96,36 @@ Sample success response (200):
 }
 ```
 
+---
+
 4) `GET /leads/recent`
 - Description: Devuelve las últimas 10 conversaciones ordenadas por `updated_at` desc.
 - Responses:
   - 200: JSON array con una estructura como esta:
     ```json
-    [
-      {
-        "id": "conv_12345",
-        "lead_id": "lead_98765",
-        "canal": "whatsapp",
-        "created_at": "2025-08-24T18:00:00Z",
-        "updated_at": "2025-08-24T18:15:00Z",
-        "state": {
-          "nombre": "María Rodriguez",
-          "telefono": "521234567890",
-          "completed": false
-        },
-        "conversation_mode": "agente",
-        "asignado_asesor": "asesor_ventas_001"
-      }
-    ]
+    {
+      "conversations": [
+        {
+          "id": "conv_12345",
+          "lead_id": "lead_98765",
+          "canal": "whatsapp",
+          "created_at": "2025-08-24T18:00:00Z",
+          "updated_at": "2025-08-24T18:15:00Z",
+          "state": {
+            "nombre": "María García López",
+            "telefono": "521234567890",
+            "completed": false
+          },
+          "conversation_mode": "bot",
+          "asignado_asesor": "asesor_ventas_001"
+        }
+      ],
+      "has_more": true
+    }
     ```
   - 500: Internal server error
 
+---
 
 5) `POST /get-conversation`
 - Description: Obtiene el estado completo de una conversación. Es de tipo POST y recibe `wa_id` en el body JSON.
@@ -151,6 +161,8 @@ Sample success response (200):
 }
 ```
 
+---
+
 6) `POST /get-recent-messages`
 - Description: Devuelve los últimos mensajes de una conversación específica. Endpoint usado por el polling de la aplicación. Es de tipo POST para permitir enviar en el body JSON `wa_id` y `last_message_id`.
 - Body (JSON):
@@ -184,6 +196,41 @@ Ejemplo de respuesta de éxito (200):
   ],
   "completed": false,
   "updated_at": "2025-08-24T18:15:00Z"
+}
+```
+
+---
+
+7) `POST /next-conversations`
+- Description: Devuelve las siguientes 10 conversaciones más recientes después de los IDs proporcionados. Recibe una lista de IDs de conversaciones y devuelve las siguientes 10 basándose en updated_at. Es de tipo POST y recibe `conversation_ids` en el body JSON.
+- Body (JSON):
+  - `conversation_ids` (array of strings) - lista de IDs de conversaciones
+- Responses:
+  - 200: JSON with conversation details
+  - 400: Missing `conversation_ids` or invalid JSON
+  - 404: Conversation not found
+  - 500: Internal server error
+
+Sample success response (200):
+```json
+{
+  "conversations": [
+    {
+      "id": "conv_12345",
+      "lead_id": "lead_98765",
+      "canal": "whatsapp",
+      "created_at": "2025-08-24T18:00:00Z",
+      "updated_at": "2025-08-24T18:15:00Z",
+      "state": {
+        "nombre": "María García López",
+        "telefono": "521234567890",
+        "completed": false
+      },
+      "conversation_mode": "bot",
+      "asignado_asesor": "asesor_ventas_001"
+    }
+  ],
+  "has_more": true
 }
 ```
 

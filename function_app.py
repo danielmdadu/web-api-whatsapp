@@ -340,9 +340,9 @@ def get_recent_leads(req: func.HttpRequest) -> func.HttpResponse:
     try:
         container = get_cosmos_container()
 
-        # Query para obtener las últimas 10 conversaciones por updated_at descendente
+        # Query para obtener las últimas 11 conversaciones por updated_at descendente
         query = (
-            "SELECT TOP 10 c.id, c.lead_id, c.canal, c.created_at, c.updated_at, "
+            "SELECT TOP 11 c.id, c.lead_id, c.canal, c.created_at, c.updated_at, "
             "c.state, c.conversation_mode, c.asignado_asesor FROM c ORDER BY c.updated_at DESC"
         )
 
@@ -353,6 +353,14 @@ def get_recent_leads(req: func.HttpRequest) -> func.HttpResponse:
 
         # materializar resultados en lista
         items = list(items_iterable)
+
+        # Verificar si hay más conversaciones
+        has_more = False
+        if len(items) == 11:
+            has_more = True
+
+        # Tomar solo las primeras 10 conversaciones
+        items = items[:10]
 
         # Asegurar que cada item tenga las claves esperadas y formatear si es necesario
         results = []
@@ -377,7 +385,12 @@ def get_recent_leads(req: func.HttpRequest) -> func.HttpResponse:
             }
             results.append(formatted)
 
-        return func.HttpResponse(json.dumps(results, ensure_ascii=False), status_code=200, mimetype="application/json")
+        response_data = {
+            "conversations": results,
+            "has_more": has_more
+        }
+
+        return func.HttpResponse(json.dumps(response_data, ensure_ascii=False), status_code=200, mimetype="application/json")
 
     except Exception as e:
         logging.error(f"Error in get-recent-conversations endpoint: {e}")
@@ -494,4 +507,122 @@ def get_recent_messages(req: func.HttpRequest) -> func.HttpResponse:
 
     except Exception as e:
         logging.error(f"Error in get-recent-messages endpoint: {e}")
+        return func.HttpResponse("Internal server error", status_code=500)
+
+@app.route(route="next-conversations", methods=["POST"])
+def next_conversations(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    Devuelve las siguientes 10 conversaciones más recientes después de los IDs proporcionados.
+    Recibe una lista de IDs de conversaciones y devuelve las siguientes 10 basándose en updated_at.
+    """
+    logging.info('next-conversations endpoint called')
+    
+    try:
+        # Verify JWT
+        auth_header = req.headers.get('Authorization') or req.headers.get('authorization')
+        if not verify_bearer_token(auth_header):
+            return func.HttpResponse('Unauthorized', status_code=401)
+
+        body = req.get_json()
+        if not body:
+            return func.HttpResponse("Invalid JSON", status_code=400)
+
+        conversation_ids = body.get('conversation_ids')
+        if not conversation_ids or not isinstance(conversation_ids, list):
+            return func.HttpResponse("Missing or invalid conversation_ids array", status_code=400)
+
+        container = get_cosmos_container()
+
+        # Si no hay IDs proporcionados, devolver las primeras 10 conversaciones
+        if len(conversation_ids) == 0:
+            query = (
+                "SELECT TOP 11 c.id, c.lead_id, c.canal, c.created_at, c.updated_at, "
+                "c.state, c.conversation_mode, c.asignado_asesor FROM c ORDER BY c.updated_at DESC"
+            )
+        else:
+            # Construir la consulta para obtener conversaciones posteriores a los IDs proporcionados
+            # Primero obtenemos todas las conversaciones con los IDs proporcionados
+            ids_str = "', '".join(conversation_ids)
+            ids_query = f"SELECT c.id, c.updated_at FROM c WHERE c.id IN ('{ids_str}')"
+            
+            # Ejecutar consulta para obtener los IDs y sus updated_at
+            ids_results = list(container.query_items(
+                query=ids_query,
+                enable_cross_partition_query=True
+            ))
+            
+            if not ids_results:
+                # Si no se encuentran los IDs, devolver las primeras 10 conversaciones
+                query = (
+                    "SELECT TOP 11 c.id, c.lead_id, c.canal, c.created_at, c.updated_at, "
+                    "c.state, c.conversation_mode, c.asignado_asesor FROM c ORDER BY c.updated_at DESC"
+                )
+            else:
+                # Encontrar el updated_at más antiguo, es decir, el último con el que se tuvo una conversación
+                last_updated_at = min(item.get("updated_at", "") for item in ids_results)
+                
+                # Luego obtenemos las siguientes 10 conversaciones después de esa fecha
+                query = (
+                    "SELECT TOP 11 c.id, c.lead_id, c.canal, c.created_at, c.updated_at, "
+                    "c.state, c.conversation_mode, c.asignado_asesor FROM c "
+                    f"WHERE c.updated_at < '{last_updated_at}' "
+                    "ORDER BY c.updated_at DESC"
+                )
+
+            logging.info(f"Query: {query}")
+
+        items_iterable = container.query_items(
+            query=query,
+            enable_cross_partition_query=True
+        )
+
+        logging.info(f"Items iterable: {items_iterable}")
+
+        # Materializar resultados en lista
+        items = list(items_iterable)
+
+        # Verificar si hay más conversaciones
+        has_more = False
+        if len(items) == 11:
+            has_more = True
+
+        # Tomar solo las primeras 10 conversaciones
+        items = items[:10]
+
+        # Formatear resultados según el formato requerido
+        results = []
+        for item in items:
+            raw_state = item.get("state", {}) or {}
+            # Mantener solo los campos necesarios en el state
+            trimmed_state = {
+                "nombre": raw_state.get("nombre", ""),
+                "telefono": raw_state.get("telefono", ""),
+                "completed": raw_state.get("completed", False)
+            }
+
+            formatted = {
+                "id": item.get("id"),
+                "lead_id": item.get("lead_id"),
+                "canal": item.get("canal", ""),
+                "created_at": item.get("created_at", ""),
+                "updated_at": item.get("updated_at", ""),
+                "state": trimmed_state,
+                "conversation_mode": item.get("conversation_mode", "bot"),
+                "asignado_asesor": item.get("asignado_asesor", "")
+            }
+            results.append(formatted)
+
+        response_data = {
+            "conversations": results,
+            "has_more": has_more
+        }
+
+        return func.HttpResponse(
+            json.dumps(response_data, ensure_ascii=False), 
+            status_code=200, 
+            mimetype="application/json"
+        )
+
+    except Exception as e:
+        logging.error(f"Error in next-conversations endpoint: {e}")
         return func.HttpResponse("Internal server error", status_code=500)

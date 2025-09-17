@@ -1,6 +1,6 @@
 # Azure Function - Web API WhatsApp
 
-This Azure Function app exposes several HTTP endpoints used by the chatbot system.
+Esta Azure Function expone varios endpoints HTTP utilizados por una plataforma web para monitorear y manipular un chatbot.
 
 Variables de entorno
 ---------
@@ -24,7 +24,7 @@ Endpoints
 ---------
 
 1) `POST /login`
-- Description: Simple login endpoint for testing.
+- Description: Endpoint de login.
 - Body (JSON):
   - `username` (string)
   - `password` (string)

@@ -234,12 +234,6 @@ Sample success response (200):
 }
 ```
 
-Notes
------
-- La conexión a Cosmos DB actualmente está configurada para pruebas locales en `get_cosmos_container()`; reemplázala por las variables de entorno `COSMOS_CONNECTION_STRING`, `COSMOS_DB_NAME` y `COSMOS_CONTAINER_NAME` para producción.
-- La función `send-agent-message` actualmente usa una URL de chatbot codificada — cámbiala por una configuración a través de variables de entorno antes de desplegar.
-- Autenticación: la Function App ahora emite un JWT al iniciar sesión con éxito. La secret del JWT debe configurarse en App Settings como `JWT_SECRET`.
-
 Autenticación / notas de uso
 ---------------------------
 - Tras un `POST /login` exitoso, la respuesta contiene `access_token` (un JWT). El frontend debe almacenar ese token (por ejemplo en `localStorage`) y enviarlo en las peticiones siguientes en el header `Authorization` así:

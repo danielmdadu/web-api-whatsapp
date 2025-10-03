@@ -234,6 +234,18 @@ Sample success response (200):
 }
 ```
 
+---
+
+8) `GET /get-multimedia-whatsapp`
+- Description: Devuelve el archivo multimedia de la API de WhatsApp (https://developers.facebook.com/docs/whatsapp/cloud-api/reference/media/)
+- Query Params:
+  - `id` (string) - ID del archivo multimedia
+- Responses:
+  - 200: Media file returned
+  - 400: Missing `id` or invalid JSON
+  - 404: Multimedia file not found
+  - 500: Internal server error
+
 Autenticación / notas de uso
 ---------------------------
 - Tras un `POST /login` exitoso, la respuesta contiene `access_token` (un JWT). El frontend debe almacenar ese token (por ejemplo en `localStorage`) y enviarlo en las peticiones siguientes en el header `Authorization` así:

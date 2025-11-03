@@ -451,7 +451,14 @@ def format_conversation_response(conversation_data: dict, messages: list = None)
         "conversation_mode": conversation_data.get("conversation_mode", "bot"),
         "lead_info": {
             "nombre": state.get("nombre", ""),
-            "telefono": state.get("telefono", "")
+            "telefono": state.get("telefono", ""),
+            "tipo_maquinaria": state.get("tipo_maquinaria", ""),
+            "lugar_requerimiento": state.get("lugar_requerimiento", ""),
+            "sitio_web": state.get("sitio_web", ""),
+            "uso_empresa_o_venta": state.get("uso_empresa_o_venta", ""),
+            "nombre_empresa": state.get("nombre_empresa", ""),
+            "giro_empresa": state.get("giro_empresa", ""),
+            "correo": state.get("correo", "")
         },
         "messages": messages,
         "completed": state.get("completed", False),

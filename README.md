@@ -148,7 +148,14 @@ Sample success response (200):
   "conversation_mode": "bot",
   "lead_info": {
     "nombre": "María García López",
-    "telefono": "521234567890"
+    "telefono": "521234567890",
+    "tipo_maquinaria": "tipo_maquinaria",
+    "lugar_requerimiento": "lugar_requerimiento",
+    "sitio_web": "sitio_web",
+    "uso_empresa_o_venta": "uso_empresa_o_venta",
+    "nombre_empresa": "nombre_empresa",
+    "giro_empresa": "giro_empresa",
+    "correo": "correo"
   },
   "messages": [
     {
@@ -187,6 +194,13 @@ Ejemplo de respuesta de éxito (200):
   "lead_info": {
     "nombre": "María",
     "telefono": "521234567890",
+    "tipo_maquinaria": "tipo_maquinaria",
+    "lugar_requerimiento": "lugar_requerimiento",
+    "sitio_web": "sitio_web",
+    "uso_empresa_o_venta": "uso_empresa_o_venta",
+    "nombre_empresa": "nombre_empresa",
+    "giro_empresa": "giro_empresa",
+    "correo": "correo"
   },
   "messages": [
     {
